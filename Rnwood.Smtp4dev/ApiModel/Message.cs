@@ -8,206 +8,198 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Rnwood.Smtp4dev.DbModel;
 using System.Net.Http.Headers;
+using Rnwood.Smtp4dev;
+using System.Web.Http;
 
 namespace Rnwood.Smtp4dev.ApiModel
 {
-    public class Message
-    {
+	public class Message : ICacheByKey
+	{
 
 
-        public Message(DbModel.Message dbMessage)
-        {
-            Id = dbMessage.Id;
-            From = dbMessage.From;
-            To = dbMessage.To;
-            Cc = "";
-            Bcc = "";
-            ReceivedDate = dbMessage.ReceivedDate;
-            Subject = dbMessage.Subject;
+		public Message(DbModel.Message dbMessage)
+		{
+			Id = dbMessage.Id;
+			From = dbMessage.From;
+			To = dbMessage.To;
+			Cc = "";
+			Bcc = "";
+			ReceivedDate = dbMessage.ReceivedDate;
+			Subject = dbMessage.Subject;
 
-            Parts = new List<ApiModel.MessageEntitySummary>();
+			Parts = new List<ApiModel.MessageEntitySummary>();
 
-            if (dbMessage.MimeParseError != null)
-            {
-                MimeParseError = dbMessage.MimeParseError;
-                Headers = new List<Header>();
-                Parts = new List<MessageEntitySummary>();
-            }
-            else
-            {
-                using (MemoryStream stream = new MemoryStream(dbMessage.Data))
-                {
-                    MimeMessage mime = MimeMessage.Load(stream);
+			if (dbMessage.MimeParseError != null)
+			{
+				MimeParseError = dbMessage.MimeParseError;
+				Headers = new List<Header>();
+				Parts = new List<MessageEntitySummary>();
+			}
+			else
+			{
+				using (MemoryStream stream = new MemoryStream(dbMessage.Data))
+				{
+					MimeMessage = MimeMessage.Load(stream);
 
-                    if (mime.From != null) {
-                        From = mime.From.ToString();
-                    }
+					if (MimeMessage.From != null)
+					{
+						From = MimeMessage.From.ToString();
+					}
 
-                    List<string> recipients = new List<string>(dbMessage.To.Split(",")
-                        .Select(r => r.Trim())
-                        .Where(r => !string.IsNullOrEmpty(r)));
+					List<string> recipients = new List<string>(dbMessage.To.Split(",")
+						.Select(r => r.Trim())
+						.Where(r => !string.IsNullOrEmpty(r)));
 
-                    if (mime.To != null) {
-                        To = string.Join(", ", mime.To.Select(t => t.ToString()));
+					if (MimeMessage.To != null)
+					{
+						To = string.Join(", ", MimeMessage.To.Select(t => t.ToString()));
 
-                        foreach(MailboxAddress to in mime.To.Where(t => t is MailboxAddress))
-                        {
-                            recipients.Remove(to.Address);
-                        }
-                    }
+						foreach (MailboxAddress to in MimeMessage.To.Where(t => t is MailboxAddress))
+						{
+							recipients.Remove(to.Address);
+						}
+					}
 
-                    if (mime.Cc != null)
-                    {
-                        Cc = string.Join(", ", mime.Cc.Select(t => t.ToString()));
+					if (MimeMessage.Cc != null)
+					{
+						Cc = string.Join(", ", MimeMessage.Cc.Select(t => t.ToString()));
 
-                        foreach (MailboxAddress cc in mime.Cc.Where(t => t is MailboxAddress))
-                        {
-                            recipients.Remove(cc.Address);
-                        }
-                    }
+						foreach (MailboxAddress cc in MimeMessage.Cc.Where(t => t is MailboxAddress))
+						{
+							recipients.Remove(cc.Address);
+						}
+					}
 
-                    Bcc = string.Join(", ", recipients);
+					Bcc = string.Join(", ", recipients);
 
-                    Headers = mime.Headers.Select(h => new Header { Name = h.Field, Value = h.Value }).ToList();
-                    Parts.Add(HandleMimeEntity(mime.Body));
-                }
-            }
-        }
-
-
-        private MessageEntitySummary HandleMimeEntity(MimeEntity entity)
-        {
-            int index = 0;
-
-            return MimeEntityVisitor.Visit<MessageEntitySummary>(entity, null, (e, p) =>
-           {
-               string cid = e.ContentId ?? index.ToString();
-
-               MessageEntitySummary result = new MessageEntitySummary()
-               {
-                   MessageId = Id,
-                   ContentId = cid,
-                   Name = e.ContentId + " - " + e.ContentType.MimeType,
-                   Headers = e.Headers.Select(h => new Header { Name = h.Field, Value = h.Value }).ToList(),
-                   ChildParts = new List<MessageEntitySummary>(),
-                   Attachments = new List<AttachmentSummary>(),
-                   Size = e.ToString().Length
-               };
-
-               if (p != null)
-               {
-                   p.ChildParts.Add(result);
-
-                   if (e.IsAttachment)
-                   {
-                       p.Attachments.Add(new AttachmentSummary()
-                       {
-                           ContentId = result.ContentId,
-                           FileName = string.IsNullOrEmpty(e.ContentType?.Name)
-                               ? e.ContentDisposition?.FileName
-                               : e.ContentType.Name,
-                           Url = $"/api/messages/{Id}/part/{result.ContentId}/content"
-                       });
-                   }
-               }
-
-               index++;
-               return result;
-           });
-
-        }
-
-        internal static FileStreamResult GetPartContent(DbModel.Message result, string cid)
-        {
-            MimePart contentEntity = (MimePart)GetPart(result, cid);
-            return new FileStreamResult(contentEntity.Content.Open(), contentEntity.ContentType.MimeType)
-            {
-                FileDownloadName = contentEntity.FileName
-            };
-        }
-
-        internal static string GetPartContentAsText(DbModel.Message result, string cid)
-        {
-            MimeEntity contentEntity = GetPart(result, cid);
-
-            if (contentEntity is MimePart part)
-            {
-                using (StreamReader reader = new StreamReader(part.Content.Open()))
-                {
-                    return reader.ReadToEnd();
-                }
-            } else
-            {
-                return contentEntity.ToString();
-            }
-            
-        }
+					Headers = MimeMessage.Headers.Select(h => new Header { Name = h.Field, Value = h.Value }).ToList();
+					Parts.Add(HandleMimeEntity(MimeMessage.Body));
+				}
+			}
+		}
 
 
+		private MessageEntitySummary HandleMimeEntity(MimeEntity entity)
+		{
+			int index = 0;
 
-        internal static string GetPartSource(DbModel.Message result, string cid)
-        {
-            MimeEntity contentEntity = GetPart(result, cid);
-            return contentEntity.ToString();
-        }
+			return MimeEntityVisitor.VisitWithResults<MessageEntitySummary>(entity, (e, p) =>
+		   {
+			   MessageEntitySummary result = new MessageEntitySummary()
+			   {
+				   MessageId = Id,
+				   Id = index.ToString(),
+				   ContentId = e.ContentId,
+				   Name = e.ContentId + " - " + e.ContentType.MimeType,
+				   Headers = e.Headers.Select(h => new Header { Name = h.Field, Value = h.Value }).ToList(),
+				   ChildParts = new List<MessageEntitySummary>(),
+				   Attachments = new List<AttachmentSummary>(),
+				   Size = e.ToString().Length,
+				   MimeEntity = e
+			   };
 
-        private static MimeEntity GetPart(DbModel.Message message, string cid)
-        {
-            MimeEntity result = null;
+			   if (p != null)
+			   {
+				   p.ChildParts.Add(result);
 
-            using (MemoryStream stream = new MemoryStream(message.Data))
-            {
-                MimeMessage mime = MimeMessage.Load(stream);
+				   if (e.IsAttachment)
+				   {
+					   p.Attachments.Add(new AttachmentSummary()
+					   {
+						   Id = result.Id,
+						   ContentId = result.ContentId,
+						   FileName = string.IsNullOrEmpty(e.ContentType?.Name)
+							   ? e.ContentDisposition?.FileName
+							   : e.ContentType.Name,
+						   Url = $"/api/messages/{Id}/part/{result.Id}/content"
+					   });
+				   }
+			   }
 
-                int index = 0;
-                MimeEntityVisitor.Visit<DBNull>(mime.Body, null, (e, p) =>
-                {
-                    if (((e as MimePart)?.ContentId ?? (index++.ToString())) == cid)
-                    {
-                        result = e;
-                    }
+			   index++;
+			   return result;
+		   });
 
-                    return DBNull.Value;
-                });
-            }
+		}
 
-            return result;
-        }
+		internal static FileStreamResult GetPartContent(Message result, string cid)
+		{
+			MimeEntity contentEntity = GetPart(result, cid);
 
-        public static string GetHtml(DbModel.Message dbMessage)
-        {
-            using (MemoryStream stream = new MemoryStream(dbMessage.Data))
-            {
-                MimeMessage mime = MimeMessage.Load(stream);
+			if (contentEntity is MimePart mimePart)
+			{
+				return new FileStreamResult(mimePart.Content.Open(), contentEntity.ContentType?.MimeType ?? "application/text")
+				{
+					FileDownloadName = mimePart.FileName
+				};
+			}
+			else
+			{
+				MemoryStream outputStream = new MemoryStream();
+				contentEntity.WriteTo(outputStream, true);
+				outputStream.Seek(0, SeekOrigin.Begin);
 
-                return mime.HtmlBody;
-            }
-        }
+				return new FileStreamResult(outputStream, contentEntity.ContentType?.MimeType ?? "application/text");
+			}
+		}
 
-        public static string GetText(DbModel.Message dbMessage)
-        {
-            using (MemoryStream stream = new MemoryStream(dbMessage.Data))
-            {
-                MimeMessage mime = MimeMessage.Load(stream);
+		internal static string GetPartContentAsText(Message result, string id)
+		{
+			MimeEntity contentEntity = GetPart(result, id);
 
-                return mime.TextBody;
-            }
-        }
+			if (contentEntity is MimePart part)
+			{
+				using (StreamReader reader = new StreamReader(part.Content.Open()))
+				{
+					return reader.ReadToEnd();
+				}
+			}
+			else
+			{
+				return contentEntity.ToString();
+			}
 
-        public Guid Id { get; set; }
+		}
 
-        public string From { get; set; }
-        public string To { get; set; }
-        public string Cc { get; set; }
-        public string Bcc { get; set; }
-        public DateTime ReceivedDate { get; set; }
 
-        public string Subject { get; set; }
 
-        public List<MessageEntitySummary> Parts { get; set; }
+		internal static string GetPartSource(Message message, string id)
+		{
+			MimeEntity contentEntity = GetPart(message, id);
+			return contentEntity.ToString();
+		}
 
-        public List<Header> Headers { get; set; }
+		
+		private static MimeEntity GetPart(Message message, string id)
+		{
+			MessageEntitySummary part = message.Parts.Flatten(p => p.ChildParts).FirstOrDefault(p => p.Id == id);
 
-        public string MimeParseError { get; set; }
-    }
+			if (part == null)
+			{
+				throw new FileNotFoundException($"Part with id '{id}' in message {message.Id} is not found");
+			}
+
+			return part.MimeEntity;
+		}
+
+		public Guid Id { get; set; }
+
+		public string From { get; set; }
+		public string To { get; set; }
+		public string Cc { get; set; }
+		public string Bcc { get; set; }
+		public DateTime ReceivedDate { get; set; }
+
+		public string Subject { get; set; }
+
+		public List<MessageEntitySummary> Parts { get; set; }
+
+		public List<Header> Headers { get; set; }
+
+		public string MimeParseError { get; set; }
+
+		internal MimeMessage MimeMessage { get; set; }
+
+		string ICacheByKey.CacheKey => Id.ToString();
+	}
 }
